@@ -119,21 +119,27 @@ def load_labels(labels_path: Optional[str], n_samples: int) -> Optional[np.ndarr
         print(f"Warning: Labels file not found: {labels_path}")
         return None
     
-    try:
-        import pandas as pd
-        labels_df = pd.read_csv(labels_path)
-        # Get the first column or 'label' column if exists
-        if 'label' in labels_df.columns:
-            labels = labels_df['label'].values
-        elif 'labels' in labels_df.columns:
-            labels = labels_df['labels'].values
-        else:
-            labels = labels_df.iloc[:, 0].values
-    except ImportError:
-        # Fallback to numpy
-        labels = np.loadtxt(labels_path, delimiter=',', ndmin=1)
+    # Handle .npy files directly
+    if path.suffix.lower() == '.npy':
+        labels = np.load(labels_path)
         if labels.ndim > 1:
             labels = labels[:, 0]
+    else:
+        try:
+            import pandas as pd
+            labels_df = pd.read_csv(labels_path)
+            # Get the first column or 'label' column if exists
+            if 'label' in labels_df.columns:
+                labels = labels_df['label'].values
+            elif 'labels' in labels_df.columns:
+                labels = labels_df['labels'].values
+            else:
+                labels = labels_df.iloc[:, 0].values
+        except ImportError:
+            # Fallback to numpy
+            labels = np.loadtxt(labels_path, delimiter=',', ndmin=1)
+            if labels.ndim > 1:
+                labels = labels[:, 0]
     
     if len(labels) != n_samples:
         print(f"Warning: Number of labels ({len(labels)}) doesn't match number of samples ({n_samples})")
@@ -340,6 +346,111 @@ def create_3d_plot(transformed: np.ndarray, labels: Optional[np.ndarray],
     print(f"3D plot saved to: {output_path}")
 
 
+def save_pca_as_rgb_image(transformed: np.ndarray, output_path: str, 
+                          image_size: Tuple[int, int] = (512, 512),
+                          variance_info: Dict[str, float] = None) -> None:
+    """
+    Save PCA transformed data as an RGB image.
+    
+    For 2D data: PC1 and PC2 are mapped to color channels using a colormap,
+                 with intensity based on point density.
+    For 3D data: PC1->R, PC2->G, PC3->B direct mapping after normalization.
+    
+    Args:
+        transformed: Transformed data of shape (n_samples, 2) or (n_samples, 3)
+        output_path: Path to save the RGB image
+        image_size: Size of the output image (height, width)
+        variance_info: Optional dictionary containing variance information to add as overlay
+    """
+    n_components = transformed.shape[1]
+    
+    if n_components == 2:
+        # For 2D: Create a 2D histogram/density map and apply colormap
+        print("Creating RGB image from 2D PCA (density-based coloring)...")
+        
+        # Create 2D histogram
+        hist, xedges, yedges = np.histogram2d(
+            transformed[:, 0], transformed[:, 1],
+            bins=image_size[0],
+            range=[[transformed[:, 0].min(), transformed[:, 0].max()],
+                   [transformed[:, 1].min(), transformed[:, 1].max()]]
+        )
+        
+        # Normalize histogram to [0, 1]
+        hist_norm = hist / hist.max() if hist.max() > 0 else hist
+        
+        # Apply colormap (viridis) to create RGB
+        colormap = cm.viridis(hist_norm)
+        rgb_image = (colormap[:, :, :3] * 255).astype(np.uint8)
+        
+    elif n_components == 3:
+        # For 3D: Direct mapping PC1->R, PC2->G, PC3->B
+        print("Creating RGB image from 3D PCA (direct channel mapping)...")
+        
+        # Normalize each component to [0, 255]
+        pc_min = transformed.min(axis=0)
+        pc_max = transformed.max(axis=0)
+        pc_range = pc_max - pc_min
+        
+        # Avoid division by zero
+        pc_range = np.where(pc_range == 0, 1, pc_range)
+        
+        normalized = (transformed - pc_min) / pc_range
+        
+        # Create a blank image and plot points
+        img_height, img_width = image_size
+        rgb_image = np.zeros((img_height, img_width, 3), dtype=np.uint8)
+        
+        # Map 3D points to 2D image coordinates (using PC1, PC2 for position, PC3 for blue tint)
+        x_coords = ((normalized[:, 0] * (img_width - 1))).astype(int)
+        y_coords = ((1 - normalized[:, 1]) * (img_height - 1)).astype(int)  # Flip Y for image coords
+        
+        # Clip coordinates to image bounds
+        x_coords = np.clip(x_coords, 0, img_width - 1)
+        y_coords = np.clip(y_coords, 0, img_height - 1)
+        
+        # Assign colors based on PC values
+        r_channel = (normalized[:, 0] * 255).astype(np.uint8)
+        g_channel = (normalized[:, 1] * 255).astype(np.uint8)
+        b_channel = (normalized[:, 2] * 255).astype(np.uint8)
+        
+        # Accumulate colors for overlapping points
+        for i in range(len(x_coords)):
+            rgb_image[y_coords[i], x_coords[i]] = [r_channel[i], g_channel[i], b_channel[i]]
+        
+        # Optional: Apply a small blur to make it more visually appealing
+        try:
+            from scipy.ndimage import gaussian_filter
+            rgb_image = gaussian_filter(rgb_image.astype(float), sigma=1).astype(np.uint8)
+        except ImportError:
+            pass  # Skip blur if scipy not available
+            
+    else:
+        raise ValueError(f"Expected 2 or 3 components, got {n_components}")
+    
+    # Save the image
+    plt.figure(figsize=(10, 10))
+    plt.imshow(rgb_image)
+    plt.axis('off')
+    
+    if variance_info:
+        textstr = f'Variance: {variance_info["explained_variance_ratio"]:.2%}\\nSamples: {variance_info["n_samples"]}'
+        props = dict(boxstyle='round', facecolor='wheat', alpha=0.7)
+        plt.text(0.02, 0.98, textstr, transform=plt.gca().transAxes, fontsize=10,
+                verticalalignment='top', bbox=props, color='black')
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight', pad_inches=0)
+    plt.close()
+    
+    # Also save raw RGB array as numpy file
+    npy_path = output_path.replace('.png', '_rgb.npy')
+    np.save(npy_path, rgb_image)
+    
+    print(f"RGB image saved to: {output_path}")
+    print(f"RGB numpy array saved to: {npy_path}")
+
+
 def save_statistics(stats: Dict[str, Any], output_path: str) -> None:
     """Save PCA statistics to a JSON file."""
     with open(output_path, 'w') as f:
@@ -380,6 +491,10 @@ Examples:
                        help='Disable feature standardization before PCA')
     parser.add_argument('--save_transformed', action='store_true',
                        help='Save transformed features to output directory')
+    parser.add_argument('--save_rgb', action='store_true',
+                       help='Save PCA results as RGB image (in addition to scatter plot)')
+    parser.add_argument('--rgb_size', type=int, default=512,
+                       help='Size of RGB image in pixels (default: 512)')
     
     args = parser.parse_args()
     
@@ -424,6 +539,16 @@ Examples:
             transformed_path = output_dir / 'transformed_features.npy'
             np.save(str(transformed_path), transformed)
             print(f"Transformed features saved to: {transformed_path}")
+        
+        # Save RGB image if requested
+        if args.save_rgb:
+            rgb_path = output_dir / 'pca_rgb.png'
+            save_pca_as_rgb_image(
+                transformed, 
+                str(rgb_path), 
+                image_size=(args.rgb_size, args.rgb_size),
+                variance_info=stats
+            )
         
         print("\n" + "=" * 60)
         print("Visualization complete!")
