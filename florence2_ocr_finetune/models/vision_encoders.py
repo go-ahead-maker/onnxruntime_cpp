@@ -79,19 +79,70 @@ class VisionEncoderFactory:
         name: str, 
         pretrained: bool, 
         image_size: int,
+        pretrained_path: Optional[str] = None,
         **kwargs
     ) -> nn.Module:
-        """创建 DaViT encoder (Florence-2 默认)"""
+        """创建 DaViT encoder (Florence-2 默认)
+        
+        Args:
+            name: 模型名称
+            pretrained: 是否加载预训练权重
+            image_size: 图像尺寸
+            pretrained_path: 自定义预训练权重路径（优先于自动下载）
+            **kwargs: 其他参数
+        """
         try:
             from timm import create_model
             model = create_model(
                 name,
-                pretrained=pretrained,
+                pretrained=False,  # 先不加载，手动处理
                 img_size=image_size,
-                num_classes=0,  # 移除分类头
-                global_pool='',  # 保留空间特征
+                num_classes=0,
+                global_pool='',
                 **kwargs
             )
+            
+            # 加载预训练权重
+            if pretrained:
+                if pretrained_path is not None:
+                    # 从自定义路径加载
+                    print(f"Loading DaViT pretrained weights from: {pretrained_path}")
+                    checkpoint = torch.load(pretrained_path, map_location='cpu')
+                    if 'state_dict' in checkpoint:
+                        checkpoint = checkpoint['state_dict']
+                    # 过滤不匹配的键
+                    filtered_checkpoint = {}
+                    for k, v in checkpoint.items():
+                        if k.startswith('model.'):
+                            filtered_checkpoint[k[6:]] = v
+                        else:
+                            filtered_checkpoint[k] = v
+                    
+                    # 移除不需要的分类头
+                    filtered_checkpoint = {
+                        k: v for k, v in filtered_checkpoint.items() 
+                        if not k.startswith('head.') and not k.startswith('classifier.')
+                    }
+                    
+                    missing_keys, unexpected_keys = model.load_state_dict(filtered_checkpoint, strict=False)
+                    if missing_keys:
+                        print(f"Warning: Missing keys in checkpoint: {missing_keys[:10]}...")
+                    if unexpected_keys:
+                        print(f"Warning: Unexpected keys in checkpoint: {unexpected_keys[:10]}...")
+                else:
+                    # 使用 timm 自动下载预训练权重
+                    print(f"Loading DaViT pretrained weights from timm (model: {name})")
+                    temp_model = create_model(name, pretrained=True, num_classes=0)
+                    temp_state = temp_model.state_dict()
+                    # 过滤掉分类头
+                    filtered_state = {
+                        k: v for k, v in temp_state.items()
+                        if not k.startswith('head.') and not k.startswith('classifier.')
+                    }
+                    missing_keys, unexpected_keys = model.load_state_dict(filtered_state, strict=False)
+                    del temp_model
+                    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            
             return DaViTEncoderWrapper(model, image_size)
         except ImportError:
             raise ImportError("Please install timm: pip install timm")
@@ -103,9 +154,18 @@ class VisionEncoderFactory:
         name: str, 
         pretrained: bool, 
         image_size: int,
+        pretrained_path: Optional[str] = None,
         **kwargs
     ) -> nn.Module:
-        """创建 ViT encoder"""
+        """创建 ViT encoder
+        
+        Args:
+            name: 模型名称
+            pretrained: 是否加载预训练权重
+            image_size: 图像尺寸
+            pretrained_path: 自定义预训练权重路径
+            **kwargs: 其他参数
+        """
         try:
             from timm import create_model
             # 常见的 ViT 模型名称映射
@@ -119,12 +179,38 @@ class VisionEncoderFactory:
             
             model = create_model(
                 model_name,
-                pretrained=pretrained,
+                pretrained=False,
                 img_size=image_size,
                 num_classes=0,
                 global_pool='',
                 **kwargs
             )
+            
+            # 加载预训练权重
+            if pretrained:
+                if pretrained_path is not None:
+                    print(f"Loading ViT pretrained weights from: {pretrained_path}")
+                    checkpoint = torch.load(pretrained_path, map_location='cpu')
+                    if 'state_dict' in checkpoint:
+                        checkpoint = checkpoint['state_dict']
+                    
+                    filtered_checkpoint = {
+                        k: v for k, v in checkpoint.items()
+                        if not k.startswith('head.') and not k.startswith('classifier.')
+                    }
+                    missing_keys, unexpected_keys = model.load_state_dict(filtered_checkpoint, strict=False)
+                else:
+                    print(f"Loading ViT pretrained weights from timm (model: {model_name})")
+                    temp_model = create_model(model_name, pretrained=True, num_classes=0)
+                    temp_state = temp_model.state_dict()
+                    filtered_state = {
+                        k: v for k, v in temp_state.items()
+                        if not k.startswith('head.') and not k.startswith('classifier.')
+                    }
+                    missing_keys, unexpected_keys = model.load_state_dict(filtered_state, strict=False)
+                    del temp_model
+                    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            
             return ViTEncoderWrapper(model, image_size)
         except ImportError:
             raise ImportError("Please install timm: pip install timm")
@@ -136,9 +222,18 @@ class VisionEncoderFactory:
         name: str, 
         pretrained: bool, 
         image_size: int,
+        pretrained_path: Optional[str] = None,
         **kwargs
     ) -> nn.Module:
-        """创建 Swin Transformer encoder"""
+        """创建 Swin Transformer encoder
+        
+        Args:
+            name: 模型名称
+            pretrained: 是否加载预训练权重
+            image_size: 图像尺寸
+            pretrained_path: 自定义预训练权重路径
+            **kwargs: 其他参数
+        """
         try:
             from timm import create_model
             # 常见的 Swin 模型名称映射
@@ -152,11 +247,37 @@ class VisionEncoderFactory:
             
             model = create_model(
                 model_name,
-                pretrained=pretrained,
+                pretrained=False,
                 img_size=image_size,
                 num_classes=0,
                 **kwargs
             )
+            
+            # 加载预训练权重
+            if pretrained:
+                if pretrained_path is not None:
+                    print(f"Loading Swin pretrained weights from: {pretrained_path}")
+                    checkpoint = torch.load(pretrained_path, map_location='cpu')
+                    if 'state_dict' in checkpoint:
+                        checkpoint = checkpoint['state_dict']
+                    
+                    filtered_checkpoint = {
+                        k: v for k, v in checkpoint.items()
+                        if not k.startswith('head.') and not k.startswith('classifier.')
+                    }
+                    missing_keys, unexpected_keys = model.load_state_dict(filtered_checkpoint, strict=False)
+                else:
+                    print(f"Loading Swin pretrained weights from timm (model: {model_name})")
+                    temp_model = create_model(model_name, pretrained=True, num_classes=0)
+                    temp_state = temp_model.state_dict()
+                    filtered_state = {
+                        k: v for k, v in temp_state.items()
+                        if not k.startswith('head.') and not k.startswith('classifier.')
+                    }
+                    missing_keys, unexpected_keys = model.load_state_dict(filtered_state, strict=False)
+                    del temp_model
+                    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            
             return SwinEncoderWrapper(model, image_size)
         except ImportError:
             raise ImportError("Please install timm: pip install timm")
@@ -168,9 +289,18 @@ class VisionEncoderFactory:
         name: str, 
         pretrained: bool, 
         image_size: int,
+        pretrained_path: Optional[str] = None,
         **kwargs
     ) -> nn.Module:
-        """创建 ResNet encoder"""
+        """创建 ResNet encoder
+        
+        Args:
+            name: 模型名称
+            pretrained: 是否加载预训练权重
+            image_size: 图像尺寸
+            pretrained_path: 自定义预训练权重路径
+            **kwargs: 其他参数
+        """
         try:
             from timm import create_model
             # 常见的 ResNet 模型名称映射
@@ -185,11 +315,39 @@ class VisionEncoderFactory:
             
             model = create_model(
                 model_name,
-                pretrained=pretrained,
+                pretrained=False,
                 img_size=image_size,
                 num_classes=0,
                 **kwargs
             )
+            
+            # 加载预训练权重
+            if pretrained:
+                if pretrained_path is not None:
+                    print(f"Loading ResNet pretrained weights from: {pretrained_path}")
+                    checkpoint = torch.load(pretrained_path, map_location='cpu')
+                    if 'state_dict' in checkpoint:
+                        checkpoint = checkpoint['state_dict']
+                    
+                    filtered_checkpoint = {
+                        k: v for k, v in checkpoint.items()
+                        if not k.startswith('head.') and not k.startswith('classifier.')
+                        and not k.startswith('fc.')
+                    }
+                    missing_keys, unexpected_keys = model.load_state_dict(filtered_checkpoint, strict=False)
+                else:
+                    print(f"Loading ResNet pretrained weights from timm (model: {model_name})")
+                    temp_model = create_model(model_name, pretrained=True, num_classes=0)
+                    temp_state = temp_model.state_dict()
+                    filtered_state = {
+                        k: v for k, v in temp_state.items()
+                        if not k.startswith('head.') and not k.startswith('classifier.')
+                        and not k.startswith('fc.')
+                    }
+                    missing_keys, unexpected_keys = model.load_state_dict(filtered_state, strict=False)
+                    del temp_model
+                    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            
             return ResNetEncoderWrapper(model, image_size)
         except ImportError:
             raise ImportError("Please install timm: pip install timm")

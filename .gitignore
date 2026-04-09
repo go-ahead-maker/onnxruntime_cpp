@@ -8,8 +8,6 @@ __pycache__/
 env/
 venv/
 .venv/
-.ENV
-.venv.bak/
 pip-log.txt
 pip-delete-this-directory.txt
 .tox/
@@ -20,18 +18,16 @@ nosetests.xml
 coverage.xml
 *.cover
 *.log
-.git/modules/
-.pytest_cache/
-.hypothesis/
-.eggs/
-*.egg-info/
-.installed.cfg
-*.manifest
-*.spec
-.mypy_cache/
-.pyre/
-.pytype/
-cython_debug/
+*.pot
+*.pyc
+*.pyo
+*.pyd
+.MF
+tags
+TAGS
+.idlerc/
+.python-version
+ipynb_checkpoints/
 
 # Distribution / packaging
 .Python
@@ -50,26 +46,27 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
 
-# Environment
+# Pytest
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Jupyter
+.ipynb_checkpoints
+
+# Environment variables
 .env
 .venv
 env/
-venv/
 ENV
-.ENV
-env.bak/
-venv.bak/
 
-# IDE
+# IDEs
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
 
-# OS
+# OS generated files
 .DS_Store
 .DS_Store?
 ._*
