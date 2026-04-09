@@ -12,7 +12,7 @@
 - **ViT**: `vit_base`, `vit_large`, `vit_huge`, `vit_small`
 - **Swin Transformer**: `swin_tiny`, `swin_small`, `swin_base`, `swin_large`
 - **ResNet**: `resnet18`, `resnet34`, `resnet50`, `resnet101`, `resnet152`
-- **自定义 Encoder**: 提供自定义 Python 模块路径
+- **自定义 Encoder**: 从 Python 文件、模块或 HuggingFace 加载
 
 #### 预训练权重加载
 
@@ -30,6 +30,26 @@ model:
     pretrained_path: null
     # 方式 2: 使用本地权重文件
     # pretrained_path: "/path/to/vit_base_pretrained.pth"
+    image_size: 384
+```
+
+#### 自定义 Vision Encoder 🆕
+
+支持三种方式加载自定义 encoder：
+
+1. **Python 文件**: `custom_path: "./my_encoder.py"`
+2. **模块路径**: `custom_path: "my_package.encoders.MyEncoder"`
+3. **HuggingFace**: `custom_path: "facebook/dino-vitb16"`
+
+详见：[自定义 Encoder 使用指南](docs/custom_encoder_guide.md)
+
+```yaml
+model:
+  vision_encoder:
+    type: "custom"
+    custom_path: "./examples/custom_vision_encoder.py"
+    pretrained: true
+    pretrained_path: "./weights/my_encoder.pth"  # 可选
     image_size: 384
 ```
 

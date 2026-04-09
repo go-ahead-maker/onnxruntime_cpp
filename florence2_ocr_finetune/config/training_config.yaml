@@ -11,10 +11,15 @@ model:
     # 是否加载预训练权重
     pretrained: true
     # 自定义预训练权重路径 (可选，优先于自动下载)
+    # 支持格式：.bin, .pt, .pth, .safetensors
     pretrained_path: null
     # 图像输入尺寸
     image_size: 384
     # 自定义编码器路径 (当 type 为 custom 时使用)
+    # 支持三种方式:
+    # 1. Python 文件路径：./my_encoders/custom_vit.py
+    # 2. 模块路径：my_package.encoders.MyEncoder
+    # 3. HuggingFace 模型 ID：facebook/dino-vitb16
     custom_path: null
   
   # 冻结组件配置 (支持独立冻结每个部分)

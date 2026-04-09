@@ -355,27 +355,327 @@ class VisionEncoderFactory:
             raise RuntimeError(f"Failed to create ResNet encoder: {e}")
     
     @staticmethod
-    def _load_custom_encoder(custom_path: str, **kwargs) -> nn.Module:
-        """加载自定义 encoder"""
+    def _load_custom_encoder(
+        custom_path: str, 
+        pretrained: bool = True,
+        pretrained_path: Optional[str] = None,
+        image_size: int = 384,
+        **kwargs
+    ) -> nn.Module:
+        """
+        加载自定义 encoder
+        
+        支持三种方式：
+        1. 从 Python 文件导入 (custom_path 以 .py 结尾)
+        2. 从模块路径导入 (custom_path 为模块名，如 my_package.encoders.MyEncoder)
+        3. 从 HuggingFace 模型卡导入 (custom_path 为 HF model_id)
+        
+        Args:
+            custom_path: 自定义 encoder 路径
+            pretrained: 是否加载预训练权重
+            pretrained_path: 预训练权重路径（可选）
+            image_size: 图像尺寸
+            **kwargs: 其他参数
+            
+        Returns:
+            nn.Module: 自定义 encoder
+        """
+        import importlib
         import importlib.util
         import sys
+        import os
         
-        # 加载自定义模块
-        spec = importlib.util.spec_from_file_location("custom_encoder", custom_path)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Cannot load custom encoder from {custom_path}")
+        print(f"Loading custom encoder from: {custom_path}")
         
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["custom_encoder"] = module
-        spec.loader.exec_module(module)
+        # 方式 1: 从 Python 文件导入
+        if custom_path.endswith('.py'):
+            if not os.path.exists(custom_path):
+                raise FileNotFoundError(f"Custom encoder file not found: {custom_path}")
+            
+            module_name = os.path.splitext(os.path.basename(custom_path))[0]
+            spec = importlib.util.spec_from_file_location(module_name, custom_path)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Cannot load custom encoder from {custom_path}")
+            
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+            
+            # 尝试多种可能的入口函数
+            create_func = None
+            for func_name in ['create_encoder', 'build_encoder', 'get_encoder', 'create_model']:
+                if hasattr(module, func_name):
+                    create_func = getattr(module, func_name)
+                    break
+            
+            if create_func is None:
+                # 尝试查找类
+                for attr_name in dir(module):
+                    attr = getattr(module, attr_name)
+                    if isinstance(attr, type) and issubclass(attr, nn.Module):
+                        if 'encoder' in attr_name.lower() or 'vision' in attr_name.lower():
+                            print(f"Using class: {attr_name}")
+                            try:
+                                encoder = attr(image_size=image_size, **kwargs)
+                                if pretrained and pretrained_path:
+                                    encoder = VisionEncoderFactory._load_weights_to_encoder(
+                                        encoder, pretrained_path
+                                    )
+                                return VisionEncoderFactory._wrap_custom_encoder(encoder, image_size)
+                            except Exception as e:
+                                print(f"Failed to instantiate {attr_name}: {e}")
+                                continue
+                
+                raise AttributeError(
+                    "Custom encoder module must have one of these functions: "
+                    "'create_encoder', 'build_encoder', 'get_encoder', 'create_model', "
+                    "or a class that inherits from nn.Module with 'encoder' or 'vision' in its name"
+                )
+            
+            # 调用创建函数
+            try:
+                encoder = create_func(
+                    pretrained=pretrained,
+                    pretrained_path=pretrained_path,
+                    image_size=image_size,
+                    **kwargs
+                )
+            except TypeError:
+                # 如果函数不接受这些参数，尝试不带参数调用
+                encoder = create_func()
+            
+            # 如果需要加载权重且 create_func 没有处理
+            if pretrained and pretrained_path and not hasattr(encoder, '_weights_loaded'):
+                encoder = VisionEncoderFactory._load_weights_to_encoder(encoder, pretrained_path)
+            
+            return VisionEncoderFactory._wrap_custom_encoder(encoder, image_size)
         
-        # 假设自定义模块中有 create_encoder 函数
-        if not hasattr(module, 'create_encoder'):
-            raise AttributeError(
-                "Custom encoder module must have a 'create_encoder' function"
-            )
+        # 方式 2: 从模块路径导入 (如 my_package.encoders.MyEncoder)
+        elif '.' in custom_path and not custom_path.startswith('/'):
+            parts = custom_path.split('.')
+            module_path = '.'.join(parts[:-1])
+            class_name = parts[-1]
+            
+            try:
+                module = importlib.import_module(module_path)
+                encoder_class = getattr(module, class_name)
+                
+                if not issubclass(encoder_class, nn.Module):
+                    raise ValueError(f"{class_name} is not a subclass of nn.Module")
+                
+                encoder = encoder_class(image_size=image_size, **kwargs)
+                
+                if pretrained and pretrained_path:
+                    encoder = VisionEncoderFactory._load_weights_to_encoder(
+                        encoder, pretrained_path
+                    )
+                
+                return VisionEncoderFactory._wrap_custom_encoder(encoder, image_size)
+                
+            except ImportError as e:
+                raise ImportError(f"Cannot import module {module_path}: {e}")
+            except AttributeError as e:
+                raise AttributeError(f"Class {class_name} not found in {module_path}: {e}")
         
-        return module.create_encoder(**kwargs)
+        # 方式 3: 从 HuggingFace 模型卡导入
+        else:
+            try:
+                from transformers import AutoConfig, AutoModel
+                
+                # 尝试作为 HF 模型加载
+                config = AutoConfig.from_pretrained(custom_path, trust_remote_code=True)
+                
+                # 获取 embed_dim
+                embed_dim = getattr(config, 'hidden_size', None) or \
+                           getattr(config, 'embed_dim', None) or \
+                           getattr(config, 'd_model', None)
+                
+                if embed_dim is None:
+                    # 尝试通过实例化获取
+                    temp_model = AutoModel.from_pretrained(
+                        custom_path,
+                        trust_remote_code=True
+                    )
+                    embed_dim = VisionEncoderFactory._infer_embed_dim_from_model(temp_model)
+                    del temp_model
+                    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                
+                encoder = AutoModel.from_pretrained(
+                    custom_path,
+                    trust_remote_code=True
+                )
+                
+                # 如果提供了额外的权重路径，加载它
+                if pretrained_path:
+                    encoder = VisionEncoderFactory._load_weights_to_encoder(
+                        encoder, pretrained_path
+                    )
+                
+                return VisionEncoderFactory._wrap_custom_encoder(encoder, image_size)
+                
+            except Exception as e:
+                raise ImportError(
+                    f"Cannot load custom encoder from {custom_path}. "
+                    f"Tried as file path, module path, and HuggingFace model ID. Error: {e}"
+                )
+    
+    @staticmethod
+    def _load_weights_to_encoder(encoder: nn.Module, weight_path: str) -> nn.Module:
+        """
+        加载预训练权重到 encoder
+        
+        Args:
+            encoder: encoder 模型
+            weight_path: 权重文件路径 (.bin, .pt, .pth, .safetensors)
+            
+        Returns:
+            nn.Module: 加载了权重的 encoder
+        """
+        import os
+        
+        if not os.path.exists(weight_path):
+            raise FileNotFoundError(f"Weights file not found: {weight_path}")
+        
+        print(f"Loading pretrained weights from: {weight_path}")
+        
+        # 根据文件扩展名选择加载方式
+        if weight_path.endswith('.safetensors'):
+            try:
+                from safetensors.torch import load_file
+                state_dict = load_file(weight_path)
+            except ImportError:
+                raise ImportError("Please install safetensors: pip install safetensors")
+        else:
+            # .bin, .pt, .pth
+            checkpoint = torch.load(weight_path, map_location='cpu')
+            
+            # 处理不同的 checkpoint 格式
+            if isinstance(checkpoint, dict):
+                if 'state_dict' in checkpoint:
+                    state_dict = checkpoint['state_dict']
+                elif 'model_state_dict' in checkpoint:
+                    state_dict = checkpoint['model_state_dict']
+                elif 'model' in checkpoint:
+                    state_dict = checkpoint['model']
+                else:
+                    state_dict = checkpoint
+            else:
+                state_dict = checkpoint
+        
+        # 过滤和重命名键（如果需要）
+        filtered_state_dict = {}
+        for k, v in state_dict.items():
+            # 移除前缀（如 'module.', 'encoder.'等）
+            new_k = k
+            if new_k.startswith('module.'):
+                new_k = new_k[7:]
+            if new_k.startswith('encoder.'):
+                new_k = new_k[8:]
+            
+            # 跳过不匹配的层（如分类头）
+            if any(skip in new_k for skip in ['head.', 'classifier.', 'fc.', 'logits']):
+                continue
+            
+            filtered_state_dict[new_k] = v
+        
+        # 加载权重
+        missing_keys, unexpected_keys = encoder.load_state_dict(filtered_state_dict, strict=False)
+        
+        if missing_keys:
+            print(f"Warning: Missing keys in checkpoint ({len(missing_keys)}): {missing_keys[:5]}...")
+        if unexpected_keys:
+            print(f"Warning: Unexpected keys in checkpoint ({len(unexpected_keys)}): {unexpected_keys[:5]}...")
+        
+        encoder._weights_loaded = True
+        return encoder
+    
+    @staticmethod
+    def _wrap_custom_encoder(encoder: nn.Module, image_size: int) -> nn.Module:
+        """
+        将自定义 encoder 包装为标准格式
+        
+        Args:
+            encoder: 自定义 encoder
+            image_size: 图像尺寸
+            
+        Returns:
+            nn.Module: 包装后的 encoder
+        """
+        # 如果已经是 BaseEncoderWrapper 的子类，直接返回
+        if isinstance(encoder, BaseEncoderWrapper):
+            return encoder
+        
+        # 检查是否有 forward_features 方法
+        if hasattr(encoder, 'forward_features') and callable(getattr(encoder, 'forward_features')):
+            # 只需要设置 embed_dim 和 image_size
+            if not hasattr(encoder, 'image_size'):
+                encoder.image_size = image_size
+            if not hasattr(encoder, 'embed_dim'):
+                encoder.embed_dim = VisionEncoderFactory._infer_embed_dim_from_model(encoder)
+            return encoder
+        
+        # 否则，创建一个包装器
+        class CustomEncoderWrapper(BaseEncoderWrapper):
+            def __init__(self, model: nn.Module, img_size: int):
+                super().__init__(model, img_size)
+            
+            def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+                """
+                提取图像特征
+                
+                尝试多种可能的输出格式：
+                - [B, L, D]: 直接返回
+                - [B, C, H, W]: 展平为 [B, L, D]
+                - tuple/list: 取最后一个元素
+                """
+                output = self.model(x)
+                
+                # 处理不同的输出格式
+                if isinstance(output, (list, tuple)):
+                    output = output[-1]
+                
+                # 如果是 [B, C, H, W] 格式，转换为 [B, L, D]
+                if len(output.shape) == 4:
+                    B, C, H, W = output.shape
+                    output = output.permute(0, 2, 3, 1).reshape(B, H * W, C)
+                
+                return output
+        
+        return CustomEncoderWrapper(encoder, image_size)
+    
+    @staticmethod
+    def _infer_embed_dim_from_model(model: nn.Module) -> int:
+        """从模型推断 embed_dim"""
+        # 尝试从配置获取
+        if hasattr(model, 'config'):
+            config = model.config
+            for attr in ['hidden_size', 'embed_dim', 'd_model', 'dim']:
+                if hasattr(config, attr):
+                    return getattr(config, attr)
+        
+        # 尝试从模型属性获取
+        for attr in ['embed_dim', 'hidden_size', 'num_features', 'd_model']:
+            if hasattr(model, attr):
+                return getattr(model, attr)
+        
+        # 通过 forward 推断
+        with torch.no_grad():
+            try:
+                dummy_input = torch.randn(1, 3, 224, 224)
+                output = model(dummy_input)
+                
+                if isinstance(output, (list, tuple)):
+                    output = output[-1]
+                
+                if len(output.shape) == 4:
+                    return output.shape[1]  # C
+                else:
+                    return output.shape[-1]  # D
+            except Exception as e:
+                print(f"Warning: Could not infer embed_dim: {e}")
+                return 768  # 默认值
+        
+        return 768
 
 
 class BaseEncoderWrapper(nn.Module):
