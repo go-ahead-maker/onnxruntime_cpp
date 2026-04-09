@@ -10,13 +10,21 @@ model:
     name: "davit_base"
     # 是否加载预训练权重
     pretrained: true
+    # 自定义预训练权重路径 (可选，优先于自动下载)
+    pretrained_path: null
     # 图像输入尺寸
     image_size: 384
     # 自定义编码器路径 (当 type 为 custom 时使用)
     custom_path: null
   
-  # 冻结 vision encoder (可选)
-  freeze_vision_encoder: false
+  # 冻结组件配置 (支持独立冻结每个部分)
+  freeze_components:
+    # 冻结 vision encoder
+    vision_encoder: false
+    # 冻结 image projection 层 (visual features 到 text embedding 的投影)
+    image_projection: false
+    # 冻结 language model (text decoder)
+    language_model: false
   
   # 文本解码器配置
   text_decoder:

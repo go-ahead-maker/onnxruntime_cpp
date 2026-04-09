@@ -15,6 +15,7 @@ class Florence2Wrapper(nn.Module):
     Florence-2 模型包装器
     
     支持替换 vision encoder，保持其他组件不变
+    支持独立冻结 vision encoder、image projection、language model
     """
     
     def __init__(
@@ -22,6 +23,8 @@ class Florence2Wrapper(nn.Module):
         base_model_name: str = "microsoft/Florence-2-base",
         vision_encoder: Optional[nn.Module] = None,
         freeze_vision_encoder: bool = False,
+        freeze_image_projection: bool = False,
+        freeze_language_model: bool = False,
         text_decoder_pretrained: bool = True,
         max_length: int = 256,
         **kwargs
@@ -33,6 +36,8 @@ class Florence2Wrapper(nn.Module):
             base_model_name: Florence-2 基础模型名称
             vision_encoder: 自定义 vision encoder（可选）
             freeze_vision_encoder: 是否冻结 vision encoder
+            freeze_image_projection: 是否冻结 image projection 层
+            freeze_language_model: 是否冻结 language model (text decoder)
             text_decoder_pretrained: 是否使用预训练文本解码器
             max_length: 最大生成长度
             **kwargs: 其他参数
@@ -60,6 +65,18 @@ class Florence2Wrapper(nn.Module):
         # 如果提供了自定义 vision encoder，进行替换
         if vision_encoder is not None:
             self._replace_vision_encoder(vision_encoder, freeze_vision_encoder)
+        else:
+            # 即使不替换，也可以冻结原始 vision encoder
+            if freeze_vision_encoder:
+                self._freeze_vision_encoder()
+        
+        # 冻结 image projection 层（如果指定）
+        if freeze_image_projection:
+            self._freeze_image_projection()
+        
+        # 冻结 language model（如果指定）
+        if freeze_language_model:
+            self._freeze_language_model()
         
         # 加载 processor
         print("Loading processor...")
@@ -73,6 +90,8 @@ class Florence2Wrapper(nn.Module):
             'base_model': base_model_name,
             'vision_encoder_type': type(vision_encoder).__name__ if vision_encoder else 'default',
             'freeze_vision_encoder': freeze_vision_encoder,
+            'freeze_image_projection': freeze_image_projection,
+            'freeze_language_model': freeze_language_model,
             'max_length': max_length
         }
         
@@ -146,6 +165,69 @@ class Florence2Wrapper(nn.Module):
                 if isinstance(module, nn.Module) and name.split('.')[-1] in ['encoder', 'model', 'tower']:
                     return module
         return None
+    
+    def _freeze_vision_encoder(self):
+        """冻结 vision encoder"""
+        print("Freezing vision encoder...")
+        # 查找 vision encoder 模块
+        vision_module = None
+        if hasattr(self.model, 'vision_tower'):
+            vision_module = self.model.vision_tower
+        elif hasattr(self.model, 'vision_model'):
+            vision_module = self.model.vision_model
+        elif hasattr(self.model, 'encoder') and hasattr(self.model.encoder, 'vision'):
+            vision_module = self.model.encoder.vision
+        else:
+            vision_module = self._find_vision_module()
+        
+        if vision_module is not None:
+            for param in vision_module.parameters():
+                param.requires_grad = False
+            print(f"Frozen vision encoder: {type(vision_module).__name__}")
+        else:
+            print("Warning: Could not find vision encoder to freeze")
+    
+    def _freeze_image_projection(self):
+        """冻结 image projection 层"""
+        print("Freezing image projection layers...")
+        # Florence-2 中的 image projection 通常是将 visual features 投影到 text embedding 空间
+        # 常见的命名：proj, projection, visual_projection, image_proj 等
+        frozen_count = 0
+        for name, param in self.model.named_parameters():
+            if any(keyword in name.lower() for keyword in ['proj', 'projection', 'visual', 'image_emb']):
+                # 排除 vision encoder 本身的参数
+                if not any(vision_keyword in name.lower() for vision_keyword in ['vision_tower', 'vision_model', 'vision_encoder']):
+                    param.requires_grad = False
+                    frozen_count += 1
+        
+        print(f"Frozen {frozen_count} image projection parameters")
+    
+    def _freeze_language_model(self):
+        """冻结 language model (text decoder)"""
+        print("Freezing language model...")
+        # Florence-2 的 language model 通常是 decoder 部分
+        # 常见命名：decoder, lm_head, text_decoder, language_model 等
+        frozen_count = 0
+        total_params = 0
+        
+        for name, param in self.model.named_parameters():
+            # 检查是否属于 language model 部分
+            is_lm = any(keyword in name.lower() for keyword in [
+                'decoder', 'lm_head', 'text', 'language', 
+                'self_attn', 'cross_attn', 'mlp', 'embed_tokens'
+            ])
+            
+            # 排除 vision 相关部分
+            is_vision = any(vision_keyword in name.lower() for vision_keyword in [
+                'vision', 'image_enc', 'visual_enc'
+            ])
+            
+            if is_lm and not is_vision:
+                param.requires_grad = False
+                frozen_count += 1
+            total_params += 1
+        
+        print(f"Frozen {frozen_count} language model parameters")
     
     def forward(
         self,
@@ -286,6 +368,8 @@ def create_florence2_model(
     base_model: str = "microsoft/Florence-2-base",
     vision_encoder_config: Optional[Dict[str, Any]] = None,
     freeze_vision_encoder: bool = False,
+    freeze_image_projection: bool = False,
+    freeze_language_model: bool = False,
     **kwargs
 ) -> Florence2Wrapper:
     """
@@ -295,6 +379,8 @@ def create_florence2_model(
         base_model: 基础模型名称
         vision_encoder_config: vision encoder 配置
         freeze_vision_encoder: 是否冻结 vision encoder
+        freeze_image_projection: 是否冻结 image projection 层
+        freeze_language_model: 是否冻结 language model
         **kwargs: 其他参数
         
     Returns:
@@ -310,6 +396,7 @@ def create_florence2_model(
         pretrained = vision_encoder_config.get('pretrained', True)
         image_size = vision_encoder_config.get('image_size', 384)
         custom_path = vision_encoder_config.get('custom_path', None)
+        pretrained_path = vision_encoder_config.get('pretrained_path', None)
         
         print(f"Creating vision encoder: {encoder_type} - {encoder_name}")
         vision_encoder = VisionEncoderFactory.create_encoder(
@@ -317,13 +404,16 @@ def create_florence2_model(
             encoder_name=encoder_name,
             pretrained=pretrained,
             image_size=image_size,
-            custom_path=custom_path
+            custom_path=custom_path,
+            pretrained_path=pretrained_path
         )
     
     model = Florence2Wrapper(
         base_model_name=base_model,
         vision_encoder=vision_encoder,
         freeze_vision_encoder=freeze_vision_encoder,
+        freeze_image_projection=freeze_image_projection,
+        freeze_language_model=freeze_language_model,
         **kwargs
     )
     

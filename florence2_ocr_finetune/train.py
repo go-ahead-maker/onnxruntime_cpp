@@ -85,12 +85,24 @@ class OCRTrainer:
         model_config = self.config['model']
         
         vision_encoder_config = model_config.get('vision_encoder', None)
-        freeze_vision = model_config.get('freeze_vision_encoder', False)
+        
+        # 获取冻结组件配置
+        freeze_components = model_config.get('freeze_components', {})
+        freeze_vision = freeze_components.get('vision_encoder', False)
+        freeze_image_proj = freeze_components.get('image_projection', False)
+        freeze_lm = freeze_components.get('language_model', False)
+        
+        print(f"Freeze configuration:")
+        print(f"  - Vision Encoder: {freeze_vision}")
+        print(f"  - Image Projection: {freeze_image_proj}")
+        print(f"  - Language Model: {freeze_lm}")
         
         model = create_florence2_model(
             base_model=model_config['base_model'],
             vision_encoder_config=vision_encoder_config,
             freeze_vision_encoder=freeze_vision,
+            freeze_image_projection=freeze_image_proj,
+            freeze_language_model=freeze_lm,
             max_length=model_config.get('text_decoder', {}).get('max_length', 256)
         )
         
