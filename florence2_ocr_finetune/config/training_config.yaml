@@ -1,0 +1,111 @@
+model:
+  # Florence-2 基础模型
+  base_model: "microsoft/Florence-2-base"
+  
+  # Vision Encoder 配置 (支持修改)
+  vision_encoder:
+    # encoder 类型：davit(默认), vit, swin, resnet, custom
+    type: "davit"
+    # 具体编码器名称 (使用 timm 或 transformers 中的预训练模型)
+    name: "davit_base"
+    # 是否加载预训练权重
+    pretrained: true
+    # 图像输入尺寸
+    image_size: 384
+    # 自定义编码器路径 (当 type 为 custom 时使用)
+    custom_path: null
+  
+  # 冻结 vision encoder (可选)
+  freeze_vision_encoder: false
+  
+  # 文本解码器配置
+  text_decoder:
+    # 预训练模型
+    pretrained: true
+    # 最大文本长度
+    max_length: 256
+
+data:
+  # 数据集路径
+  train_data:
+    image_dir: "./data/images"
+    annotation_file: "./data/annotations_train.json"
+  val_data:
+    image_dir: "./data/images"
+    annotation_file: "./data/annotations_val.json"
+  
+  # 数据预处理
+  transforms:
+    # 图像尺寸
+    image_size: 384
+    # 数据增强
+    augmentations:
+      random_resize_crop: true
+      color_jitter: false
+      random_flip: false
+      normalize: true
+  
+  # DataLoader 配置
+  dataloader:
+    batch_size: 8
+    num_workers: 4
+    shuffle: true
+    pin_memory: true
+
+training:
+  # 优化器配置
+  optimizer:
+    type: "AdamW"
+    lr: 1e-5
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+  
+  # 学习率调度器
+  scheduler:
+    type: "cosine"  # cosine, linear, step
+    warmup_ratio: 0.1
+    min_lr_ratio: 0.1
+  
+  # 训练轮次
+  epochs: 20
+  
+  # 梯度裁剪
+  grad_clip: 1.0
+  
+  # 混合精度训练
+  fp16: true
+  
+  # 梯度累积
+  gradient_accumulation_steps: 1
+  
+  # 评估频率 (每多少个 step 评估一次)
+  eval_steps: 500
+  
+  # 保存频率 (每多少个 step 保存一次检查点)
+  save_steps: 1000
+  
+  # 日志频率
+  log_steps: 50
+
+output:
+  # 输出目录
+  output_dir: "./outputs"
+  # 实验名称
+  experiment_name: "florence2_ocr_finetune"
+  # 是否使用 wandb 记录
+  use_wandb: false
+  wandb_project: "florence2-ocr"
+
+# OCR 特定配置
+ocr:
+  # OCR 任务类型：ocr, ocr_with_region, caption, detection 等
+  task_prompt: "<OCR>"
+  # 字符集 (可选，用于自定义词表)
+  charset: null
+  # 是否使用 CTC loss
+  use_ctc_loss: false
+  # 语言设置 (可选)
+  language: "en"
+
+seed: 42
+device: "cuda"
